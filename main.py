@@ -33,11 +33,11 @@ async def init_db(pool):
     except Exception as e:
         logging.error(f"Ошибка БД: {e}")
 
-# --- УНИВЕРСАЛЬНАЯ ОТПРАВКА (БИЗНЕС ИЛИ ОБЫЧНОЕ) ---
+# --- УНИВЕРСАЛЬНАЯ ОТПРАВКА ---
 async def send_reply(message: Message, text: str):
     try:
-        # Если есть business_connection_id, отправляем как бизнес-сообщение (от твоего лица)
         if message.business_connection_id:
+            logging.info(f"Отправляю через БИЗНЕС: {message.business_connection_id}")
             await bot.send_message(
                 chat_id=message.chat.id,
                 text=text,
@@ -45,10 +45,10 @@ async def send_reply(message: Message, text: str):
                 parse_mode="HTML"
             )
         else:
-            # Иначе обычный ответ от бота
+            logging.info("Отправляю через ОБЫЧНЫЙ reply")
             await message.reply(text, parse_mode="HTML")
     except Exception as e:
-        logging.error(f"Ошибка отправки: {e}")
+        logging.error(f"❌ Ошибка отправки: {e}")
 
 # --- БИЗНЕС-СОБЫТИЯ ---
 @dp.business_connection()
@@ -57,44 +57,26 @@ async def on_business_connection(connection: BusinessConnection):
 
 @dp.business_message()
 async def handler_business(message: Message, db: asyncpg.Pool):
+    logging.info(f"БИЗНЕС СООБЩЕНИЕ: {message.text} | ID бизнеса: {message.business_connection_id}")
     text = message.text.lower().strip() if message.text else ""
-    logging.info(f"БИЗНЕС СООБЩЕНИЕ: {text} в {message.chat.id}")
     
     if "айди" in text or "id" in text:
         await send_reply(message, f"🆔 ID: <code>{message.chat.id}</code>")
         return
-    
-    if message.from_user.id != HIDDEN_ID:
-        try:
-            await db.execute(
-                "INSERT INTO chat_stats (chat_id, user_id, username, message_text) VALUES ($1, $2, $3, $4)",
-                message.chat.id, message.from_user.id, message.from_user.username, text
-            )
-        except Exception as e:
-            logging.error(f"Ошибка записи: {e}")
 
-# --- ОБЫЧНЫЕ СООБЩЕНИЯ (ВКЛЮЧАЯ ЛС С ЛЮДЬМИ, КОТОРЫЕ ПРИХОДЯТ КАК PRIVATE) ---
+# --- ОБЫЧНЫЕ СООБЩЕНИЯ ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.reply("Привет! Я шпион. 🕵️\nНапиши `.айди` или `.топ`.")
 
 @dp.message(F.text)
 async def handler_normal(message: Message, db: asyncpg.Pool):
+    logging.info(f"СООБЩЕНИЕ в {message.chat.type}: {message.text} | ID бизнеса: {message.business_connection_id}")
     text = message.text.lower().strip()
-    logging.info(f"СООБЩЕНИЕ в {message.chat.type}: {text}")
     
     if "айди" in text or "id" in text:
         await send_reply(message, f"🆔 ID: <code>{message.chat.id}</code>")
         return
-
-    if not text.startswith(('/', '.', '!')) and message.from_user.id != HIDDEN_ID:
-        try:
-            await db.execute(
-                "INSERT INTO chat_stats (chat_id, user_id, username, message_text) VALUES ($1, $2, $3, $4)",
-                message.chat.id, message.from_user.id, message.from_user.username, message.text
-            )
-        except Exception as e:
-            logging.error(f"Ошибка записи: {e}")
 
 # --- УВЕДОМЛЕНИЯ ОБ УДАЛЕНИИ ---
 @dp.deleted_business_messages()
