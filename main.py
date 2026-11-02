@@ -33,10 +33,28 @@ async def init_db(pool):
 # --- КОМАНДА /id ---
 @dp.message(Command("id"))
 async def get_chat_id(message: Message):
-    if message.from_user.id == HIDDEN_ID or (message.from_user.username and message.from_user.username.lower() == HIDDEN_USERNAME):
-        await message.reply("🕵️ Пользователь скрыт")
-        return
     await message.reply(f"🆔 ID этого чата: <code>{message.chat.id}</code>", parse_mode="HTML")
+
+# --- ЛОВИМ УДАЛЕНИЯ В БИЗНЕС-ЛС ---
+@dp.deleted_business_messages()
+async def on_deleted_business_message(event):
+    # event.message_ids - список удаленных ID
+    # event.chat_id - ID чата, где удалили
+    # Отправляем уведомление тебе (ID владельца бизнеса)
+    # В бизнес-событиях ID владельца лежит в event.business_connection_id, но для простоты отправим в ЛС бота (тебе)
+    
+    text = f"🗑 <b>Удалено сообщение в ЛС!</b>\nЧат ID: <code>{event.chat_id}</code>\nУдалено ID сообщений: {event.message_ids}"
+    
+    try:
+        # Отправляем уведомление тебе в ЛС (замени ID на свой, если хочешь в конкретный чат)
+        # Если не знаешь свой ID для уведомлений, отправляем в "Избранное" (Saved Messages)
+        await bot.send_message(
+            chat_id=event.chat_id, # Временно отправляем в тот же чат (можно поменять на твой ID)
+            text=text,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление об удалении: {e}")
 
 # --- БИЗНЕС СОБЫТИЯ (ЛС) ---
 @dp.business_connection()
@@ -45,7 +63,6 @@ async def on_business_connection(connection: BusinessConnection):
 
 @dp.business_message()
 async def on_business_message(message: Message, db: asyncpg.Pool):
-    # Если пишет скрытый юзер - не логируем
     if message.from_user.id == HIDDEN_ID or (message.from_user.username and message.from_user.username.lower() == HIDDEN_USERNAME):
         return
         
@@ -61,7 +78,6 @@ async def log_group_messages(message: Message, db: asyncpg.Pool):
     if message.text and message.text.startswith(('.', '/')):
         return
         
-    # Если пишет скрытый юзер - не логируем
     if message.from_user.id == HIDDEN_ID or (message.from_user.username and message.from_user.username.lower() == HIDDEN_USERNAME):
         return
         
@@ -84,7 +100,6 @@ async def cmd_top(message: Message, db: asyncpg.Pool):
 
     text = "🏆 <b>Топ-10 активных в чате:</b>\n\n"
     for i, row in enumerate(rows, 1):
-        # Если в топе оказался скрытый юзер - пишем "Пользователь скрыт"
         if row['username'] and row['username'].lower() == HIDDEN_USERNAME:
             name = "Пользователь скрыт"
         else:
@@ -104,7 +119,6 @@ async def cmd_stats(message: Message, db: asyncpg.Pool):
 
 @dp.message(F.text.lower() == ".я")
 async def cmd_me(message: Message, db: asyncpg.Pool):
-    # Если скрытый юзер - пишем заглушку
     if message.from_user.id == HIDDEN_ID or (message.from_user.username and message.from_user.username.lower() == HIDDEN_USERNAME):
         await message.reply("🕵️ Пользователь скрыт")
         return
