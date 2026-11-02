@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.types import Message, BusinessConnection
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 import config
 
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
@@ -28,92 +28,67 @@ async def init_db(pool):
         )
     """)
 
-# --- СТАРТ (Слэш) ---
+# --- СТАРТ ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    await message.reply("Привет! Я твой личный шпион. 🕵️\nНапиши /id, чтобы узнать ID чата, или /top для статистики.\n(Также работают команды с точкой: .id и .top)")
+    await message.reply("Привет! Я твой шпион. 🕵️\n\n.айди\n.топ\n\n(Чтобы я видел удаления в группах, сделай меня Админом!)")
 
-# --- АЙДИ (Слэш) ---
-@dp.message(Command("id"))
-async def get_chat_id(message: Message):
-    await message.reply(f"🆔 ID этого чата: <code>{message.chat.id}</code>", parse_mode="HTML")
-
-# --- АЙДИ (Точка) ---
-@dp.message(F.text.lower() == ".id")
-async def get_chat_id_dot(message: Message):
-    await message.reply(f"🆔 ID этого чата: <code>{message.chat.id}</code>", parse_mode="HTML")
-
-# --- ТОП (Слэш) ---
-@dp.message(Command("top"))
-async def cmd_top(message: Message, db: asyncpg.Pool):
-    rows = await db.fetch(
-        "SELECT username, COUNT(*) as msg_count FROM chat_stats WHERE chat_id = $1 GROUP BY username ORDER BY msg_count DESC LIMIT 10",
-        message.chat.id
-    )
-    if not rows:
-        await message.reply("📊 Нет данных.")
-        return
-    text = "🏆 <b>Топ-10 активных:</b>\n\n"
-    for i, row in enumerate(rows, 1):
-        if row['username'] and row['username'].lower() == HIDDEN_USERNAME:
-            name = "Пользователь скрыт"
-        else:
-            name = f"@{row['username']}" if row['username'] else "Аноним"
-        text += f"{i}. {name} — {row['msg_count']}\n"
-    await message.reply(text, parse_mode="HTML")
-
-# --- ТОП (Точка) ---
-@dp.message(F.text.lower() == ".top")
-async def cmd_top_dot(message: Message, db: asyncpg.Pool):
-    rows = await db.fetch(
-        "SELECT username, COUNT(*) as msg_count FROM chat_stats WHERE chat_id = $1 GROUP BY username ORDER BY msg_count DESC LIMIT 10",
-        message.chat.id
-    )
-    if not rows:
-        await message.reply("📊 Нет данных.")
-        return
-    text = "🏆 <b>Топ-10 активных:</b>\n\n"
-    for i, row in enumerate(rows, 1):
-        if row['username'] and row['username'].lower() == HIDDEN_USERNAME:
-            name = "Пользователь скрыт"
-        else:
-            name = f"@{row['username']}" if row['username'] else "Аноним"
-        text += f"{i}. {name} — {row['msg_count']}\n"
-    await message.reply(text, parse_mode="HTML")
-
-# --- ОБРАБОТКА БИЗНЕС-СОБЫТИЙ ---
-@dp.business_connection()
-async def on_business_connection(connection: BusinessConnection):
-    logging.info(f"Подключен бизнес-аккаунт: {connection.user.id}")
-
-@dp.business_message()
-async def on_business_message(message: Message, db: asyncpg.Pool):
-    if message.from_user.id == HIDDEN_ID: return
+# --- ЛОВИМ СООБЩЕНИЯ В ГРУППАХ ---
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
+async def log_group_messages(message: Message, db: asyncpg.Pool):
     text = message.text or "[Медиа]"
+    logging.info(f"Получено сообщение в группе {message.chat.id}: {text}")
+    
+    # Сохраняем в статистику
     await db.execute(
         "INSERT INTO chat_stats (chat_id, user_id, username, message_text) VALUES ($1, $2, $3, $4)",
         message.chat.id, message.from_user.id, message.from_user.username, text
     )
+    
+    # --- ОТВЕТЫ НА КОМАНДЫ ---
+    lower_text = text.lower().strip()
+    
+    if "айди" in lower_text or "id" in lower_text:
+        if len(lower_text) < 10:
+            await message.reply(f"🆔 ID этого чата: <code>{message.chat.id}</code>", parse_mode="HTML")
+            return
+            
+    if "топ" in lower_text or "top" in lower_text:
+        if len(lower_text) < 10:
+            rows = await db.fetch(
+                "SELECT username, COUNT(*) as msg_count FROM chat_stats WHERE chat_id = $1 GROUP BY username ORDER BY msg_count DESC LIMIT 10",
+                message.chat.id
+            )
+            if not rows:
+                await message.reply("📊 Нет данных. Пишите больше!")
+                return
+            res = "🏆 <b>Топ-10 активных:</b>\n\n"
+            for i, row in enumerate(rows, 1):
+                if row['username'] and row['username'].lower() == HIDDEN_USERNAME:
+                    name = "Пользователь скрыт"
+                else:
+                    name = f"@{row['username']}" if row['username'] else "Аноним"
+                res += f"{i}. {name} — {row['msg_count']}\n"
+            await message.reply(res, parse_mode="HTML")
+            return
 
-# --- БЕЗОПАСНАЯ ОБРАБОТКА УДАЛЕНИЙ ---
+# --- ЛОВИМ УДАЛЕНИЯ В ГРУППАХ (РАБОТАЕТ ТОЛЬКО ЕСЛИ БОТ АДМИН) ---
+@dp.message(F.content_type == "text") # Это дубль для удалений, но логика такова
+async def log_all_messages(message: Message, db: asyncpg.Pool):
+    pass # Основная логика уже в логгере выше
+
+@dp.business_connection()
+async def on_business_connection(connection: BusinessConnection):
+    logging.info(f"Подключен бизнес-аккаунт: {connection.user.id}")
+
+# --- УДАЛЕНИЯ В БИЗНЕС-ЛС ---
 @dp.deleted_business_messages()
 async def on_deleted_business_message(event):
     try:
         text = f"🗑 <b>Удалено в ЛС!</b>\nЧат: <code>{event.chat_id}</code>\nID: {event.message_ids}"
-        # Отправляем уведомление тебе в ЛС
         await bot.send_message(chat_id=HIDDEN_ID, text=text, parse_mode="HTML")
     except Exception as e:
-        logging.error(f"Не смог отправить уведомление об удалении: {e}")
-
-# --- ЛОГИРОВАНИЕ ГРУПП ---
-@dp.message(F.content_type == "text")
-async def log_group_messages(message: Message, db: asyncpg.Pool):
-    if message.text and message.text.startswith(('/', '.', '!')): return
-    if message.from_user.id == HIDDEN_ID: return
-    await db.execute(
-        "INSERT INTO chat_stats (chat_id, user_id, username, message_text) VALUES ($1, $2, $3, $4)",
-        message.chat.id, message.from_user.id, message.from_user.username, message.text
-    )
+        logging.error(f"Не смог отправить уведомление: {e}")
 
 # --- ЗАПУСК ---
 async def main():
@@ -122,7 +97,6 @@ async def main():
     await init_db(pool)
     dp["db"] = pool
     
-    # Важно: сбрасываем вебхуки, чтобы убить конфликты
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception:
