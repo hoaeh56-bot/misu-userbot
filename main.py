@@ -33,23 +33,6 @@ async def init_db(pool):
     except Exception as e:
         logging.error(f"Ошибка БД: {e}")
 
-# --- УНИВЕРСАЛЬНАЯ ОТПРАВКА ---
-async def send_reply(message: Message, text: str):
-    try:
-        if message.business_connection_id:
-            logging.info(f"Отправляю через БИЗНЕС: {message.business_connection_id}")
-            await bot.send_message(
-                chat_id=message.chat.id,
-                text=text,
-                business_connection_id=message.business_connection_id,
-                parse_mode="HTML"
-            )
-        else:
-            logging.info("Отправляю через ОБЫЧНЫЙ reply")
-            await message.reply(text, parse_mode="HTML")
-    except Exception as e:
-        logging.error(f"❌ Ошибка отправки: {e}")
-
 # --- БИЗНЕС-СОБЫТИЯ ---
 @dp.business_connection()
 async def on_business_connection(connection: BusinessConnection):
@@ -57,12 +40,26 @@ async def on_business_connection(connection: BusinessConnection):
 
 @dp.business_message()
 async def handler_business(message: Message, db: asyncpg.Pool):
-    logging.info(f"БИЗНЕС СООБЩЕНИЕ: {message.text} | ID бизнеса: {message.business_connection_id}")
     text = message.text.lower().strip() if message.text else ""
+    logging.info(f"БИЗНЕС СООБЩЕНИЕ: {text} | ID бизнеса: {message.business_connection_id}")
     
     if "айди" in text or "id" in text:
-        await send_reply(message, f"🆔 ID: <code>{message.chat.id}</code>")
-        return
+        try:
+            # Пытаемся ответить через business_connection_id
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=f"🆔 ID: <code>{message.chat.id}</code>",
+                business_connection_id=message.business_connection_id,
+                parse_mode="HTML"
+            )
+            logging.info("✅ Ответ отправлен через БИЗНЕС")
+        except Exception as e:
+            logging.error(f"❌ Ошибка бизнес-отправки: {e}")
+            # Если не вышло, пробуем обычный reply
+            try:
+                await message.reply(f"🆔 ID: <code>{message.chat.id}</code>", parse_mode="HTML")
+            except Exception as e2:
+                logging.error(f"❌ Ошибка обычного reply: {e2}")
 
 # --- ОБЫЧНЫЕ СООБЩЕНИЯ ---
 @dp.message(CommandStart())
@@ -71,12 +68,15 @@ async def cmd_start(message: Message):
 
 @dp.message(F.text)
 async def handler_normal(message: Message, db: asyncpg.Pool):
-    logging.info(f"СООБЩЕНИЕ в {message.chat.type}: {message.text} | ID бизнеса: {message.business_connection_id}")
     text = message.text.lower().strip()
+    logging.info(f"СООБЩЕНИЕ в {message.chat.type}: {text} | ID бизнеса: {message.business_connection_id}")
     
     if "айди" in text or "id" in text:
-        await send_reply(message, f"🆔 ID: <code>{message.chat.id}</code>")
-        return
+        try:
+            # Пытаемся ответить
+            await message.reply(f"🆔 ID: <code>{message.chat.id}</code>", parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"❌ Ошибка reply: {e}")
 
 # --- УВЕДОМЛЕНИЯ ОБ УДАЛЕНИИ ---
 @dp.deleted_business_messages()
@@ -85,7 +85,7 @@ async def on_deleted_message(event):
     try:
         await bot.send_message(
             chat_id=HIDDEN_ID, 
-            text=f"🗑 <b>Удалено сообщение!</b>\nЧат: <code>{event.chat_id}</code>\nID сообщений: {event.message_ids}",
+            text=f"🗑 <b>Удалено сообщение!</b>\nЧат: <code>{event.chat_id}</code>\nID: {event.message_ids}",
             parse_mode="HTML"
         )
     except Exception as e:
