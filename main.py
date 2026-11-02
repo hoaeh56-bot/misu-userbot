@@ -33,22 +33,24 @@ async def init_db(pool):
     except Exception as e:
         logging.error(f"Ошибка БД: {e}")
 
-# --- ФУНКЦИЯ ОТПРАВКИ В БИЗНЕС-ЧАТ ---
-async def send_business_reply(message: Message, text: str):
+# --- УНИВЕРСАЛЬНАЯ ОТПРАВКА (БИЗНЕС ИЛИ ОБЫЧНОЕ) ---
+async def send_reply(message: Message, text: str):
     try:
-        # В бизнес-чатах нужно использовать business_connection_id
-        await bot.send_message(
-            chat_id=message.chat.id,
-            text=text,
-            business_connection_id=message.business_connection_id,
-            parse_mode="HTML"
-        )
-        return True
+        # Если есть business_connection_id, отправляем как бизнес-сообщение (от твоего лица)
+        if message.business_connection_id:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=text,
+                business_connection_id=message.business_connection_id,
+                parse_mode="HTML"
+            )
+        else:
+            # Иначе обычный ответ от бота
+            await message.reply(text, parse_mode="HTML")
     except Exception as e:
-        logging.error(f"Ошибка отправки в бизнес: {e}")
-        return False
+        logging.error(f"Ошибка отправки: {e}")
 
-# --- БИЗНЕС-СООБЩЕНИЯ (ЛС) ---
+# --- БИЗНЕС-СОБЫТИЯ ---
 @dp.business_connection()
 async def on_business_connection(connection: BusinessConnection):
     logging.info(f"✅ БИЗНЕС ПОДКЛЮЧЕН: {connection.user.id}")
@@ -56,32 +58,12 @@ async def on_business_connection(connection: BusinessConnection):
 @dp.business_message()
 async def handler_business(message: Message, db: asyncpg.Pool):
     text = message.text.lower().strip() if message.text else ""
-    logging.info(f"БИЗНЕС СООБЩЕНИЕ: {text} в чате {message.chat.id}")
+    logging.info(f"БИЗНЕС СООБЩЕНИЕ: {text} в {message.chat.id}")
     
-    # АЙДИ
     if "айди" in text or "id" in text:
-        await send_business_reply(message, f"🆔 ID чата: <code>{message.chat.id}</code>")
+        await send_reply(message, f"🆔 ID: <code>{message.chat.id}</code>")
         return
-        
-    # ТОП (если хочешь в бизнесе тоже топ)
-    if "топ" in text or "top" in text:
-        try:
-            rows = await db.fetch(
-                "SELECT username, COUNT(*) as msg_count FROM chat_stats WHERE chat_id = $1 GROUP BY username ORDER BY msg_count DESC LIMIT 10",
-                message.chat.id
-            )
-            if not rows:
-                await send_business_reply(message, "📊 Нет данных.")
-                return
-            res = "🏆 <b>Топ:</b>\n\n"
-            for i, row in enumerate(rows, 1):
-                res += f"{i}. {row['username'] or 'Аноним'} — {row['msg_count']}\n"
-            await send_business_reply(message, res)
-        except Exception as e:
-            logging.error(f"Ошибка топа в бизнесе: {e}")
-        return
-
-    # ЛОГИРУЕМ В БАЗУ (если просто текст)
+    
     if message.from_user.id != HIDDEN_ID:
         try:
             await db.execute(
@@ -91,7 +73,7 @@ async def handler_business(message: Message, db: asyncpg.Pool):
         except Exception as e:
             logging.error(f"Ошибка записи: {e}")
 
-# --- ОБЫЧНЫЕ СООБЩЕНИЯ (ГРУППЫ И ЛС С БОТОМ) ---
+# --- ОБЫЧНЫЕ СООБЩЕНИЯ (ВКЛЮЧАЯ ЛС С ЛЮДЬМИ, КОТОРЫЕ ПРИХОДЯТ КАК PRIVATE) ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.reply("Привет! Я шпион. 🕵️\nНапиши `.айди` или `.топ`.")
@@ -99,27 +81,10 @@ async def cmd_start(message: Message):
 @dp.message(F.text)
 async def handler_normal(message: Message, db: asyncpg.Pool):
     text = message.text.lower().strip()
-    logging.info(f"ОБЫЧНОЕ СООБЩЕНИЕ в {message.chat.type}: {text}")
+    logging.info(f"СООБЩЕНИЕ в {message.chat.type}: {text}")
     
     if "айди" in text or "id" in text:
-        await message.reply(f"🆔 ID: <code>{message.chat.id}</code>", parse_mode="HTML")
-        return
-        
-    if "топ" in text or "top" in text:
-        try:
-            rows = await db.fetch(
-                "SELECT username, COUNT(*) as msg_count FROM chat_stats WHERE chat_id = $1 GROUP BY username ORDER BY msg_count DESC LIMIT 10",
-                message.chat.id
-            )
-            if not rows:
-                await message.reply("📊 Нет данных.")
-                return
-            res = "🏆 <b>Топ:</b>\n\n"
-            for i, row in enumerate(rows, 1):
-                res += f"{i}. {row['username'] or 'Аноним'} — {row['msg_count']}\n"
-            await message.reply(res, parse_mode="HTML")
-        except Exception as e:
-            logging.error(f"Ошибка топа: {e}")
+        await send_reply(message, f"🆔 ID: <code>{message.chat.id}</code>")
         return
 
     if not text.startswith(('/', '.', '!')) and message.from_user.id != HIDDEN_ID:
@@ -142,7 +107,7 @@ async def on_deleted_message(event):
             parse_mode="HTML"
         )
     except Exception as e:
-        logging.error(f"Не удалось отправить уведомление: {e}")
+        logging.error(f"Ошибка уведомления: {e}")
 
 # --- ЗАПУСК ---
 async def main():
